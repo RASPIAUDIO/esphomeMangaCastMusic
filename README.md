@@ -4,7 +4,7 @@
 1. Change the project version in the `.yaml` file.
 
 2. Build the firmware. Locate:
-   .esphome/build/raspiaudio-radio/.pioenvs/raspiaudio-radio/firmware.ota.bin
+   .esphome/build/manga-music/.pioenvs/manga-music/firmware.ota.bin
    Rename it to:
    update_firmware.bin
 
