@@ -1,5 +1,6 @@
 substitutions:
     startup_sound_file: https://github.com/RASPIAUDIO/esphomeLuxe/raw/refs/heads/main/wav/sounds_timer_finished.wav    
+    music_assistant_player_entity: media_player.manga
 
 esphome:
   name: manga-music
@@ -15,7 +16,7 @@ esphome:
       
   project:
     name: manga.music-assistant
-    version: "2026.1.0"  
+    version: "2026.1.1"  
     
 esp32:
   variant: esp32
@@ -43,7 +44,25 @@ font:
   - file: "FormiqRegular-vn037.otf"
     id: my_font2
     size: 20
-    bpp: 1    
+    bpp: 1
+  - file: "FormiqRegular-vn037.otf"
+    id: my_font_small
+    size: 12
+    bpp: 1
+  - file: "gfonts://Roboto Mono"
+    id: ui_font_small
+    size: 12
+    bpp: 1
+    glyphs:
+      - " "
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      - "abcdefghijklmnopqrstuvwxyz"
+      - "0123456789"
+      - ".,;:!?-_/\\()[]{}<>|@#&+=*\"'%"
+      - "°"
+      - "àâäáãåçéèêëíìîïñóòôöõúùûüýÿ"
+      - "ÀÂÄÁÃÅÇÉÈÊËÍÌÎÏÑÓÒÔÖÕÚÙÛÜÝ"
+      - "œŒæÆ"
   
 wifi:
 #  ssid: 
@@ -131,6 +150,95 @@ display:
     id: my_display
     model: "SH1106_128x64"
     address: 0x3C
+    update_interval: 500ms
+    lambda: |-
+      const int visible_chars = 21;
+      const uint32_t now = millis();
+      it.fill(COLOR_OFF);
+
+      auto scroll_text = [&](const std::string &text) -> std::string {
+        if (text.empty()) return std::string("");
+        if (text.size() <= visible_chars) return text;
+        const int max_offset = text.size() - visible_chars;
+        const int step = (now / 350);
+        const int period = max_offset * 2;
+        int offset = (period > 0) ? (step % period) : 0;
+        if (offset > max_offset) offset = period - offset;
+        return text.substr(offset, visible_chars);
+      };
+      auto is_valid = [&](const std::string &text) -> bool {
+        return !text.empty() && text != "unknown" && text != "unavailable" && text != "None";
+      };
+
+      std::string title = id(ma_media_title).state;
+      std::string artist = id(ma_media_artist).state;
+      std::string album_name = id(ma_media_album_name).state;
+      float volume_level = id(ma_volume_level).state;
+
+      if (!is_valid(title)) title = "";
+      if (!is_valid(artist)) artist = "";
+      if (!is_valid(album_name)) album_name = "";
+      if (volume_level != volume_level) volume_level = id(Vol);
+
+      std::string line1;
+      std::string line2;
+      line1 = album_name;
+      if (!artist.empty() && !title.empty() && artist != title) {
+        bool show_artist = ((now / 3000) % 2) == 1;
+        line2 = show_artist ? artist : title;
+      } else {
+        line2 = title;
+      }
+
+      int vol_percent = int(volume_level * 100.0f + 0.5f);
+      if (vol_percent < 0) vol_percent = 0;
+      if (vol_percent > 100) vol_percent = 100;
+      std::string volume_line = "Volume: " + std::to_string(vol_percent) + "%";
+
+      it.printf(0, 0, id(ui_font_small), "%s", scroll_text(line1).c_str());
+      it.printf(0, 20, id(ui_font_small), "%s", scroll_text(line2).c_str());
+      it.printf(0, 40, id(ui_font_small), "%s", scroll_text(volume_line).c_str());
+
+text_sensor:
+  - platform: homeassistant
+    id: ma_media_content_id
+    entity_id: ${music_assistant_player_entity}
+    attribute: media_content_id
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            // Mark content change and clear stale metadata with a short grace period.
+            id(meta_content_change_ms) = millis();
+        - script.execute: clear_stale_metadata
+        - component.update: my_display
+  - platform: homeassistant
+    id: ma_media_title
+    entity_id: ${music_assistant_player_entity}
+    attribute: media_title
+    on_value:
+      then:
+        - component.update: my_display
+  - platform: homeassistant
+    id: ma_media_artist
+    entity_id: ${music_assistant_player_entity}
+    attribute: media_artist
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            id(meta_artist_update_ms) = millis();
+        - component.update: my_display
+  - platform: homeassistant
+    id: ma_media_album_name
+    entity_id: ${music_assistant_player_entity}
+    attribute: media_album_name
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            id(meta_album_update_ms) = millis();
+        - component.update: my_display
       
 i2s_audio:
   - id: i2s_audio_bus
@@ -222,6 +330,14 @@ media_player:
             
             
 sensor:
+  - platform: homeassistant
+    id: ma_volume_level
+    entity_id: ${music_assistant_player_entity}
+    attribute: volume_level
+    internal: true
+    on_value:
+      then:
+        - component.update: my_display
   - platform: rotary_encoder
     name: "Volume"
     id: volume_encoder
@@ -273,6 +389,20 @@ sensor:
             
             
 script:
+  - id: clear_stale_metadata
+    mode: restart
+    then:
+      - delay: 1200ms
+      - lambda: |-
+          const uint32_t content_ts = id(meta_content_change_ms);
+          // 500ms slack: handles metadata callbacks arriving just before/after content id update.
+          if (id(meta_album_update_ms) + 500 < content_ts) {
+            id(ma_media_album_name).publish_state("");
+          }
+          if (id(meta_artist_update_ms) + 500 < content_ts) {
+            id(ma_media_artist).publish_state("");
+          }
+      - component.update: my_display
   - id: play_sound
     parameters:
       priority: bool
@@ -334,6 +464,18 @@ globals:
   - id: mute  
     type: bool
     initial_value: 'false'  
+  - id: meta_content_change_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: meta_album_update_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: meta_artist_update_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
     
 binary_sensor:
   - platform: gpio
@@ -377,5 +519,3 @@ light:
           update_interval: 100ms
           min_brightness: 50%
           max_brightness: 100%
-
-
