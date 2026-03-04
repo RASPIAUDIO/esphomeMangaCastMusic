@@ -1,6 +1,6 @@
 {
   "name": "raspiaudio.music-assistant",
-  "version": "2025.1.1",
+  "version": "2026.1.1",
   "builds": [
     {
       "chipFamily": "ESP32",
