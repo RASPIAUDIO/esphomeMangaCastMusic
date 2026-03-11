@@ -359,7 +359,7 @@ sensor:
 #        - script.execute: volume_display                          
         - media_player.volume_set:
                 id: external_media_player
-                volume: !lambda return id(Vol);
+                volume: !lambda "return id(Vol);"
 #        - script.execute: schedule_volume_update
     on_clockwise:
       then:
@@ -369,7 +369,7 @@ sensor:
 #        - script.execute: volume_display                          
         - media_player.volume_set:
                 id: external_media_player
-                volume: !lambda return id(Vol);
+                volume: !lambda "return id(Vol);"
 #        - script.execute: schedule_volume_update            
 
   - platform: adc
