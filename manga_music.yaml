@@ -1,6 +1,6 @@
 substitutions:
     startup_sound_file: https://github.com/RASPIAUDIO/esphomeLuxe/raw/refs/heads/main/wav/sounds_timer_finished.wav    
-    music_assistant_player_entity: media_player.manga
+    music_assistant_player_entity: media_player.raspiaudio_manga_music_f8dac4_2
 
 esphome:
   name: manga-music
@@ -15,16 +15,19 @@ esphome:
            id(my_display).print(8, 20, id(my_font) , "RASPIAUDIO");          
       
   project:
-    name: manga.music-assistant
-    version: "2026.1.1"  
+    name: raspiaudio.manga-music-assistant
+    version: "2026.1.3"  
     
 esp32:
   variant: esp32
   framework:
     type: esp-idf
+    advanced:
+      include_builtin_idf_components:
+        - esp_http_client
 
 logger:
-  level: debug
+  level: warn
 
 api:
   on_client_connected:
@@ -129,13 +132,7 @@ external_components:
       url: https://github.com/esphome/esphome
       ref: 928204066ce0082404573ea1c6a0b58aeebbd7c6
     refresh: 0s
-    components: [file, http_request, media_source, speaker_source]
-  - source:
-      type: git
-      url: https://github.com/kahrendt/esphome
-      ref: wifi-power-save-wake-loop
-    refresh: 0s
-    components: [wifi]
+    components: [file, media_source, speaker_source]
 
 
 
@@ -280,9 +277,7 @@ sendspin:
 media_source:
   - platform: sendspin
     id: sendspin_source
-  - platform: http_request
-    id: http_source
-    buffer_size: 500000
+    buffer_size: 2000000    
   - platform: file
     id: file_source
     files:
@@ -311,7 +306,6 @@ media_player:
     volume_min: 0.5
     volume_max: 0.9
     sources:
-      - http_source
       - sendspin_source
       - file_source
     on_state:

@@ -1,11 +1,11 @@
 {
-  "name": "raspiaudio.music-assistant",
-  "version": "2026.1.1",
+  "name": "raspiaudio.manga-music-assistant",
+  "version": "2026.1.3",
   "builds": [
     {
       "chipFamily": "ESP32",
       "ota": {
-         "md5": "821c256f727bab269a5300d49b1f7c3a",  
+         "md5": "0a1430af8fd3a42fceb452183a15382c",  
          "path": "https://raw.githubusercontent.com/RASPIAUDIO/esphomeMangaCastMusic/main/update_firmware.bin",
          "offset": 0,
          "summary": "Latest firmware"
