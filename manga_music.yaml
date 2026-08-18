@@ -1,28 +1,28 @@
 substitutions:
     startup_sound_file: https://github.com/RASPIAUDIO/esphomeLuxe/raw/refs/heads/main/wav/sounds_timer_finished.wav    
-    music_assistant_player_entity: media_player.raspiaudio_manga_music_f8dac4_2
 
 esphome:
   name: manga-music
   friendly_name: Raspiaudio Manga Music
-  min_version: 2026.1.0
+  min_version: 2026.5.0
   name_add_mac_suffix: true
   on_boot:
     priority: -100
     then:
       - script.execute: led_red
-      - lambda: |- 
-           id(my_display).print(8, 20, id(my_font) , "RASPIAUDIO");          
+      - component.update: my_display
       
   project:
     name: raspiaudio.manga-music-assistant
-    version: "2026.1.3"  
+    version: "2026.8.4"
     
 esp32:
   variant: esp32
   framework:
     type: esp-idf
     advanced:
+      # Le bootloader présent le supporte; fournit 40 Ko d'IRAM supplémentaires.
+      sram1_as_iram: true
       include_builtin_idf_components:
         - esp_http_client
 
@@ -30,6 +30,8 @@ logger:
   level: warn
 
 api:
+  # Le lecteur Sendspin doit continuer à fonctionner même sans client HA connecté.
+  reboot_timeout: 0s
   on_client_connected:
     - lambda: |-
         if (!id(boot_sound_played)) {
@@ -40,18 +42,6 @@ api:
         }
         
 font:
-  - file: "FormiqRegular-vn037.otf"
-    id: my_font
-    size: 20
-    bpp: 2
-  - file: "FormiqRegular-vn037.otf"
-    id: my_font2
-    size: 20
-    bpp: 1
-  - file: "FormiqRegular-vn037.otf"
-    id: my_font_small
-    size: 12
-    bpp: 1
   - file: "gfonts://Roboto Mono"
     id: ui_font_small
     size: 12
@@ -66,10 +56,22 @@ font:
       - "àâäáãåçéèêëíìîïñóòôöõúùûüýÿ"
       - "ÀÂÄÁÃÅÇÉÈÊËÍÌÎÏÑÓÒÔÖÕÚÙÛÜÝ"
       - "œŒæÆ"
+  - file: "gfonts://Roboto Mono"
+    id: ui_font_volume
+    size: 8
+    bpp: 1
+    glyphs:
+      - " "
+      - "VOL"
+      - "ACEPRSTU"
+      - "0123456789"
+      - "%"
   
 wifi:
 #  ssid: 
 #  password: 
+  # Évite les micro-sommeils radio susceptibles de vider le buffer Sendspin.
+  power_save_mode: none
   ap:
     ssid: "mangamusic"
     password: "12345678"
@@ -97,49 +99,15 @@ improv_serial:
 
 external_components:
   - source:
-      # https://github.com/esphome/esphome/pull/12253
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 7f34908569650e5a8b8c83e6bf89fea561218880
-    components: [mixer]
-  - source:
-      # https://github.com/esphome/esphome/pull/12254
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 6006b896a691ad38d8045ac67564c168973d1a1d
-    components: [resampler]
-  - source:
-      # https://github.com/esphome/esphome/pull/12256
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 9148832ea4e54907bad71a24d4ced1ce6c862433
-    components: [audio]
-  - source:
-      # https://github.com/esphome/esphome/pull/12258
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: bff22983a390352360796f8e1363127e0cd1f898
-    components: [media_player]
-  - source:
-      # https://github.com/esphome/esphome/pull/12284
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: a6c0a861a014e64c67d46115eba8e5370777b80a
-    components: [mdns, sendspin]
-  - source:
-      # https://github.com/esphome/esphome/pull/12429
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 928204066ce0082404573ea1c6a0b58aeebbd7c6
-    refresh: 0s
-    components: [file, media_source, speaker_source]
-
-
+      type: local
+      path: components
+    components: [audio_output_router]
 
 i2c:
   sda: GPIO18
   scl: GPIO23
-  frequency: 100kHz
+  # Un rafraîchissement plein écran passe d'environ 100 ms à environ 25 ms.
+  frequency: 400kHz
   id: bus_a
    
 display:
@@ -147,113 +115,116 @@ display:
     id: my_display
     model: "SH1106_128x64"
     address: 0x3C
-    update_interval: 500ms
+    # Une seule mise à jour groupée; les trois métadonnées ne doivent pas
+    # déclencher trois transferts I²C consécutifs.
+    update_interval: 1s
     lambda: |-
-      const int visible_chars = 21;
+      const int visible_chars = 17;
       const uint32_t now = millis();
       it.fill(COLOR_OFF);
 
+      auto utf8_length = [](const std::string &text) -> size_t {
+        size_t length = 0;
+        for (unsigned char byte : text) {
+          if ((byte & 0xC0) != 0x80) length++;
+        }
+        return length;
+      };
+      auto utf8_byte_index = [](const std::string &text, size_t character_index) -> size_t {
+        size_t characters = 0;
+        for (size_t byte_index = 0; byte_index < text.size(); byte_index++) {
+          if ((static_cast<unsigned char>(text[byte_index]) & 0xC0) != 0x80) {
+            if (characters == character_index) return byte_index;
+            characters++;
+          }
+        }
+        return text.size();
+      };
       auto scroll_text = [&](const std::string &text) -> std::string {
         if (text.empty()) return std::string("");
-        if (text.size() <= visible_chars) return text;
-        const int max_offset = text.size() - visible_chars;
-        const int step = (now / 350);
-        const int period = max_offset * 2;
+        const size_t character_count = utf8_length(text);
+        if (character_count <= visible_chars) return text;
+        const int max_offset = character_count - visible_chars;
+        const int step = (now / 300);
+        const int period = (max_offset + 2) * 2;
         int offset = (period > 0) ? (step % period) : 0;
         if (offset > max_offset) offset = period - offset;
-        return text.substr(offset, visible_chars);
+        if (offset > max_offset) offset = max_offset;
+        const size_t begin = utf8_byte_index(text, offset);
+        const size_t end = utf8_byte_index(text, offset + visible_chars);
+        return text.substr(begin, end - begin);
       };
       auto is_valid = [&](const std::string &text) -> bool {
         return !text.empty() && text != "unknown" && text != "unavailable" && text != "None";
       };
 
-      std::string title = id(ma_media_title).state;
-      std::string artist = id(ma_media_artist).state;
-      std::string album_name = id(ma_media_album_name).state;
-      float volume_level = id(ma_volume_level).state;
+      std::string title = id(selected_audio_output).get_title();
+      std::string artist = id(selected_audio_output).get_artist();
+      std::string album_name = id(selected_audio_output).get_album();
+      float volume_level = id(sendspin_media_player).volume;
 
       if (!is_valid(title)) title = "";
       if (!is_valid(artist)) artist = "";
       if (!is_valid(album_name)) album_name = "";
-      if (volume_level != volume_level) volume_level = id(Vol);
-
-      std::string line1;
-      std::string line2;
-      line1 = album_name;
-      if (!artist.empty() && !title.empty() && artist != title) {
-        bool show_artist = ((now / 3000) % 2) == 1;
-        line2 = show_artist ? artist : title;
-      } else {
-        line2 = title;
-      }
+      if (volume_level != volume_level) volume_level = 0.0f;
 
       int vol_percent = int(volume_level * 100.0f + 0.5f);
       if (vol_percent < 0) vol_percent = 0;
       if (vol_percent > 100) vol_percent = 100;
-      std::string volume_line = "Volume: " + std::to_string(vol_percent) + "%";
+      const char *playback = "ARRET";
+      using media_player::MediaPlayerState;
+      if (id(sendspin_media_player).state == MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING) playback = "LECT";
+      else if (id(sendspin_media_player).state == MediaPlayerState::MEDIA_PLAYER_STATE_PAUSED) playback = "PAUSE";
 
-      it.printf(0, 0, id(ui_font_small), "%s", scroll_text(line1).c_str());
-      it.printf(0, 20, id(ui_font_small), "%s", scroll_text(line2).c_str());
-      it.printf(0, 40, id(ui_font_small), "%s", scroll_text(volume_line).c_str());
+      it.printf(64, 0, id(ui_font_small), TextAlign::TOP_CENTER, "%s", scroll_text(title).c_str());
+      it.printf(64, 16, id(ui_font_small), TextAlign::TOP_CENTER, "%s", scroll_text(artist).c_str());
+      it.printf(64, 32, id(ui_font_small), TextAlign::TOP_CENTER, "%s", scroll_text(album_name).c_str());
+      it.printf(0, 55, id(ui_font_volume), TextAlign::TOP_LEFT, "%s", playback);
+      it.printf(127, 55, id(ui_font_volume), TextAlign::TOP_RIGHT, "VOL %d%%", vol_percent);
 
-text_sensor:
-  - platform: homeassistant
-    id: ma_media_content_id
-    entity_id: ${music_assistant_player_entity}
-    attribute: media_content_id
-    internal: true
-    on_value:
-      then:
-        - lambda: |-
-            // Mark content change and clear stale metadata with a short grace period.
-            id(meta_content_change_ms) = millis();
-        - script.execute: clear_stale_metadata
-        - component.update: my_display
-  - platform: homeassistant
-    id: ma_media_title
-    entity_id: ${music_assistant_player_entity}
-    attribute: media_title
-    on_value:
-      then:
-        - component.update: my_display
-  - platform: homeassistant
-    id: ma_media_artist
-    entity_id: ${music_assistant_player_entity}
-    attribute: media_artist
-    internal: true
-    on_value:
-      then:
-        - lambda: |-
-            id(meta_artist_update_ms) = millis();
-        - component.update: my_display
-  - platform: homeassistant
-    id: ma_media_album_name
-    entity_id: ${music_assistant_player_entity}
-    attribute: media_album_name
-    internal: true
-    on_value:
-      then:
-        - lambda: |-
-            id(meta_album_update_ms) = millis();
-        - component.update: my_display
-      
 i2s_audio:
-  - id: i2s_audio_bus
+  - id: analog_i2s_bus
     i2s_lrclk_pin: GPIO25
     i2s_bclk_pin:  GPIO5
+  - id: spdif_i2s_bus
 
 speaker:
   - platform: i2s_audio
-    id: box_speaker
-    i2s_audio_id: i2s_audio_bus
+    id: analog_speaker
+    i2s_audio_id: analog_i2s_bus
     i2s_dout_pin: GPIO26
     dac_type: external
     channel: stereo
+    sample_rate: 48000
     buffer_duration: 300ms
+
+  - platform: i2s_audio
+    id: spdif_speaker
+    i2s_audio_id: spdif_i2s_bus
+    i2s_dout_pin: GPIO04
+    dac_type: external
+    channel: stereo
+    sample_rate: 48000
+    spdif_mode: true
+    use_apll: true
+    i2s_mode: primary
+    i2s_comm_fmt: stand_i2s
+    mclk_multiple: 256
+    timeout: never
+    buffer_duration: 300ms
+
+  - platform: audio_output_router
+    id: selected_audio_output
+    analog_speaker: analog_speaker
+    spdif_speaker: spdif_speaker
+    sendspin_id: sendspin_hub
+    bits_per_sample: 16
+    num_channels: 2
+    sample_rate: 48000
 
   - platform: mixer
     id: mixing_speaker
-    output_speaker: box_speaker
+    output_speaker: selected_audio_output
     num_channels: 2
     source_speakers:
       - id: announcement_mixer_input
@@ -271,33 +242,39 @@ speaker:
 
 sendspin:
   id: sendspin_hub
-  task_stack_in_psram: true
-  kalman_process_error: 0.01
+
+audio_file:
+  - id: ready_sound
+    file: ${startup_sound_file}
 
 media_source:
   - platform: sendspin
     id: sendspin_source
-    buffer_size: 2000000    
-  - platform: file
+    buffer_size: 2000000
+  - platform: audio_file
     id: file_source
-    files:
-      - id: ready_sound
-        file: ${startup_sound_file}
 
 media_player:
   - platform: sendspin
     id: sendspin_media_player
+    name: MangaCast
+    volume_increment: 2%
   - platform: speaker_source
-    name: none
+    name: MangaCast Audio
     id: external_media_player
-    announcement_speaker: announcement_resampling_input
-    media_speaker: media_resampling_input
+    internal: true
 
     announcement_pipeline:
+      speaker: announcement_resampling_input
+      sources:
+        - file_source
       format: FLAC
       num_channels: 1
       sample_rate: 48000
     media_pipeline:
+      speaker: media_resampling_input
+      sources:
+        - sendspin_source
       format: FLAC
       num_channels: 2      
       sample_rate: 48000
@@ -305,9 +282,6 @@ media_player:
     volume_increment: 0.05
     volume_min: 0.5
     volume_max: 0.9
-    sources:
-      - sendspin_source
-      - file_source
     on_state:
       then:
         - lambda: |-
@@ -319,19 +293,12 @@ media_player:
             ) {
               id(led_green).execute();
             } else {
+              id(selected_audio_output).clear_metadata();
               id(led_red).execute();
             }
             
             
 sensor:
-  - platform: homeassistant
-    id: ma_volume_level
-    entity_id: ${music_assistant_player_entity}
-    attribute: volume_level
-    internal: true
-    on_value:
-      then:
-        - component.update: my_display
   - platform: rotary_encoder
     name: "Volume"
     id: volume_encoder
@@ -347,24 +314,10 @@ sensor:
         pullup: true
     on_anticlockwise:
       then:
-        - lambda: |-
-                id(Vol) -= 0.02;
-                if(id(Vol) < 0) id(Vol) = 0;
-#        - script.execute: volume_display                          
-        - media_player.volume_set:
-                id: external_media_player
-                volume: !lambda "return id(Vol);"
-#        - script.execute: schedule_volume_update
+        - media_player.volume_down: sendspin_media_player
     on_clockwise:
       then:
-        - lambda: |-
-                id(Vol) += 0.02;
-                if(id(Vol) > 1) id(Vol) = 1;
-#        - script.execute: volume_display                          
-        - media_player.volume_set:
-                id: external_media_player
-                volume: !lambda "return id(Vol);"
-#        - script.execute: schedule_volume_update            
+        - media_player.volume_up: sendspin_media_player
 
   - platform: adc
     pin: GPIO33 
@@ -372,7 +325,7 @@ sensor:
     icon: "mdi:battery-outline"
     update_interval: 15s
     accuracy_decimals: 3
-    attenuation: 11db
+    attenuation: 12db
     raw: true
     filters:
     - multiply: 0.00173913 # 2300 -> 4, for attenuation 11db, based on Olivier's code
@@ -383,20 +336,6 @@ sensor:
             
             
 script:
-  - id: clear_stale_metadata
-    mode: restart
-    then:
-      - delay: 1200ms
-      - lambda: |-
-          const uint32_t content_ts = id(meta_content_change_ms);
-          // 500ms slack: handles metadata callbacks arriving just before/after content id update.
-          if (id(meta_album_update_ms) + 500 < content_ts) {
-            id(ma_media_album_name).publish_state("");
-          }
-          if (id(meta_artist_update_ms) + 500 < content_ts) {
-            id(ma_media_artist).publish_state("");
-          }
-      - component.update: my_display
   - id: play_sound
     parameters:
       priority: bool
@@ -413,7 +352,7 @@ script:
           if ( (id(external_media_player).state != media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING ) || priority) {
             id(external_media_player)
               ->make_call()
-              .set_media_url("file://" + sound_file)
+              .set_media_url("audio-file://" + sound_file)
               .set_announcement(true)
               .perform();
           }
@@ -437,6 +376,18 @@ script:
 
 switch:
   - platform: template
+    id: spdif_output_switch
+    name: SPDIF
+    icon: "mdi:toslink"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: id(selected_audio_output).set_spdif_enabled(true);
+    turn_off_action:
+      - lambda: id(selected_audio_output).set_spdif_enabled(false);
+
+  - platform: template
     id: startup_sound_switch
     name: Startup sound
     icon: "mdi:card-text-outline"
@@ -449,27 +400,6 @@ globals:
     type: bool
     restore_value: no
     initial_value: "false"
-  - id: Vol
-    type: float
-    initial_value: '0.6'    
-  - id: phase
-    type: int
-    initial_value: '0'    
-  - id: mute  
-    type: bool
-    initial_value: 'false'  
-  - id: meta_content_change_ms
-    type: uint32_t
-    restore_value: no
-    initial_value: '0'
-  - id: meta_album_update_ms
-    type: uint32_t
-    restore_value: no
-    initial_value: '0'
-  - id: meta_artist_update_ms
-    type: uint32_t
-    restore_value: no
-    initial_value: '0'
     
 binary_sensor:
   - platform: gpio
