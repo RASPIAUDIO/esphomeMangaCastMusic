@@ -14,7 +14,7 @@ esphome:
       
   project:
     name: raspiaudio.manga-music-assistant
-    version: "2026.8.4"
+    version: "2026.8.5"
     
 esp32:
   variant: esp32
@@ -210,7 +210,9 @@ speaker:
     i2s_mode: primary
     i2s_comm_fmt: stand_i2s
     mclk_multiple: 256
-    timeout: never
+    # Coupe le transmetteur optique (GPIO04) après la commutation vers
+    # l'analogique ou après 500 ms sans audio, au lieu d'émettre du silence.
+    timeout: 500ms
     buffer_duration: 300ms
 
   - platform: audio_output_router
